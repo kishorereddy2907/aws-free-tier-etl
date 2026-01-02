@@ -284,3 +284,39 @@ Resources:
               }
             }
           }
+  EventBridgeInvokeStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowStartExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref ValidationStateMachine
+  ETLScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: aws-free-tier-etl-schedule
+      ScheduleExpression: rate(1 day)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ValidationStateMachine
+          Id: StepFunctionsTarget
+          RoleArn: !GetAtt EventBridgeInvokeStepFunctionsRole.Arn
+          Input: |
+            {
+              "record": {
+                "id": "scheduled-run",
+                "source": "eventbridge"
+              }
+            }
