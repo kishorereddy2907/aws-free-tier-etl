@@ -88,7 +88,7 @@ Resources:
     Properties:
       FunctionName: aws-free-tier-etl-validation
       Runtime: python3.10
-      Handler: handler.lambda_handler
+      Handler: index.lambda_handler
       Role: !GetAtt ValidationLambdaRole.Arn
       Timeout: 30
       Code:
