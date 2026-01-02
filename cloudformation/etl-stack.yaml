@@ -73,7 +73,6 @@ Resources:
   ValidationLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: aws-free-tier-etl-validation-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -150,7 +149,6 @@ Resources:
   TransformationLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: aws-free-tier-etl-transform-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
