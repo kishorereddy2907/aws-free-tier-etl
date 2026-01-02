@@ -53,3 +53,69 @@ Resources:
       TopicArn: !Ref ETLTopic
       Protocol: sqs
       Endpoint: !GetAtt ETLQueue.Arn
+  ValidationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aws-free-tier-etl-validation-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ValidationLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: arn:aws:s3:::aws-free-tier-etl-raw-446072489762/*
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref ETLTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  ValidationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aws-free-tier-etl-validation
+      Runtime: python3.10
+      Handler: handler.lambda_handler
+      Role: !GetAtt ValidationLambdaRole.Arn
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          sns = boto3.client("sns")
+
+          TOPIC_ARN = "${ETLTopic}"
+
+          def lambda_handler(event, context):
+              try:
+                  record = event.get("record")
+                  if not record or "id" not in record:
+                      raise ValueError("Invalid record")
+
+                  sns.publish(
+                      TopicArn=TOPIC_ARN,
+                      Message=json.dumps({"status": "SUCCESS", "record": record})
+                  )
+
+                  return {"status": "validated"}
+
+              except Exception as e:
+                  sns.publish(
+                      TopicArn=TOPIC_ARN,
+                      Message=json.dumps({"status": "FAILED", "error": str(e)})
+                  )
+                  raise
