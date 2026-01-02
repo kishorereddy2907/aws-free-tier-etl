@@ -1,6 +1,20 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Free Tier ETL - S3 + SNS + SQS + Lambdas
 
+Parameters:
+  ValidationLambdaRoleArn:
+    Type: String
+    Description: ARN of the IAM Role for Validation Lambda
+  TransformationLambdaRoleArn:
+    Type: String
+    Description: ARN of the IAM Role for Transformation Lambda
+  StepFunctionsRoleArn:
+    Type: String
+    Description: ARN of the IAM Role for Step Functions
+  EventBridgeInvokeStepFunctionsRoleArn:
+    Type: String
+    Description: ARN of the IAM Role for EventBridge to invoke Step Functions
+
 Resources:
 
   # --------------------
@@ -67,38 +81,6 @@ Resources:
       Endpoint: !GetAtt ETLQueue.Arn
 
   # --------------------
-  # Validation Lambda IAM Role
-  # --------------------
-
-  ValidationLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ValidationLambdaPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: s3:GetObject
-                Resource: arn:aws:s3:::aws-free-tier-etl-raw-446072489762/*
-              - Effect: Allow
-                Action: sns:Publish
-                Resource: !Ref ETLTopic
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-
-  # --------------------
   # Validation Lambda
   # --------------------
 
@@ -108,7 +90,7 @@ Resources:
       FunctionName: aws-free-tier-etl-validation
       Runtime: python3.10
       Handler: index.lambda_handler
-      Role: !GetAtt ValidationLambdaRole.Arn
+      Role: !Ref ValidationLambdaRoleArn
       Timeout: 30
       Environment:
         Variables:
@@ -138,41 +120,6 @@ Resources:
               return {"status": "validated"}
 
   # --------------------
-  # Transformation Lambda IAM Role
-  # --------------------
-
-  TransformationLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: TransformationLambdaPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: s3:PutObject
-                Resource: arn:aws:s3:::aws-free-tier-etl-curated-446072489762/*
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt ETLQueue.Arn
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-
-  # --------------------
   # Transformation Lambda
   # --------------------
 
@@ -182,7 +129,7 @@ Resources:
       FunctionName: aws-free-tier-etl-transform
       Runtime: python3.10
       Handler: index.lambda_handler
-      Role: !GetAtt TransformationLambdaRole.Arn
+      Role: !Ref TransformationLambdaRoleArn
       Timeout: 30
       Code:
         ZipFile: |
@@ -229,36 +176,16 @@ Resources:
       FunctionName: !Ref TransformationLambda
       BatchSize: 1
       Enabled: true
-  StepFunctionsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: states.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: StepFunctionsInvokeLambdaPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: !GetAtt ValidationLambda.Arn
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
+
+  # --------------------
+  # Step Functions
+  # --------------------
+
   ValidationStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: aws-free-tier-etl-validation-sm
-      RoleArn: !GetAtt StepFunctionsRole.Arn
+      RoleArn: !Ref StepFunctionsRoleArn
       DefinitionString:
         Fn::Sub: |
           {
@@ -284,25 +211,11 @@ Resources:
               }
             }
           }
-  EventBridgeInvokeStepFunctionsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: AllowStartExecution
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - states:StartExecution
-                Resource: !Ref ValidationStateMachine
+
+  # --------------------
+  # EventBridge Rule
+  # --------------------
+
   ETLScheduleRule:
     Type: AWS::Events::Rule
     Properties:
@@ -312,7 +225,7 @@ Resources:
       Targets:
         - Arn: !Ref ValidationStateMachine
           Id: StepFunctionsTarget
-          RoleArn: !GetAtt EventBridgeInvokeStepFunctionsRole.Arn
+          RoleArn: !Ref EventBridgeInvokeStepFunctionsRoleArn
           Input: |
             {
               "record": {
