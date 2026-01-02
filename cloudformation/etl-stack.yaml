@@ -1,7 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Free Tier ETL - Base Infra + Messaging
+Description: Free Tier ETL - S3 + SNS + SQS + Validation Lambda
 
 Resources:
+
+  # --------------------
+  # S3 Buckets
+  # --------------------
 
   RawBucket:
     Type: AWS::S3::Bucket
@@ -13,10 +17,18 @@ Resources:
     Properties:
       BucketName: aws-free-tier-etl-curated-446072489762
 
+  # --------------------
+  # SNS Topic
+  # --------------------
+
   ETLTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: aws-free-tier-etl-topic
+
+  # --------------------
+  # SQS Queues
+  # --------------------
 
   ETLDLQ:
     Type: AWS::SQS::Queue
@@ -53,6 +65,11 @@ Resources:
       TopicArn: !Ref ETLTopic
       Protocol: sqs
       Endpoint: !GetAtt ETLQueue.Arn
+
+  # --------------------
+  # IAM Role for Validation Lambda
+  # --------------------
+
   ValidationLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -83,6 +100,11 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "*"
+
+  # --------------------
+  # Validation Lambda
+  # --------------------
+
   ValidationLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -91,14 +113,17 @@ Resources:
       Handler: index.lambda_handler
       Role: !GetAtt ValidationLambdaRole.Arn
       Timeout: 30
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref ETLTopic
       Code:
         ZipFile: |
           import json
           import boto3
+          import os
 
           sns = boto3.client("sns")
-
-          TOPIC_ARN = "${ETLTopic}"
+          TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
 
           def lambda_handler(event, context):
               try:
@@ -108,7 +133,10 @@ Resources:
 
                   sns.publish(
                       TopicArn=TOPIC_ARN,
-                      Message=json.dumps({"status": "SUCCESS", "record": record})
+                      Message=json.dumps({
+                          "status": "SUCCESS",
+                          "record": record
+                      })
                   )
 
                   return {"status": "validated"}
@@ -116,6 +144,9 @@ Resources:
               except Exception as e:
                   sns.publish(
                       TopicArn=TOPIC_ARN,
-                      Message=json.dumps({"status": "FAILED", "error": str(e)})
+                      Message=json.dumps({
+                          "status": "FAILED",
+                          "error": str(e)
+                      })
                   )
                   raise
