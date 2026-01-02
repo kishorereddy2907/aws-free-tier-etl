@@ -150,7 +150,7 @@ Resources:
                       })
                   )
                   raise
-  TransformationLambdaRole:
+    TransformationLambdaRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: aws-free-tier-etl-transform-role
@@ -176,6 +176,7 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "*"
+
   TransformationLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -209,13 +210,15 @@ Resources:
                   )
 
               return {"status": "done"}
-                TransformationLambdaInvokePermission:
+
+  TransformationLambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref TransformationLambda
       Action: lambda:InvokeFunction
       Principal: sqs.amazonaws.com
       SourceArn: !GetAtt ETLQueue.Arn
+
   SQSToTransformationMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
@@ -223,4 +226,3 @@ Resources:
       FunctionName: !Ref TransformationLambda
       BatchSize: 1
       Enabled: true
-
