@@ -150,3 +150,62 @@ Resources:
                       })
                   )
                   raise
+  TransformationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aws-free-tier-etl-transform-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: TransformationLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: arn:aws:s3:::aws-free-tier-etl-curated-446072489762/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  TransformationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aws-free-tier-etl-transform
+      Runtime: python3.10
+      Handler: index.lambda_handler
+      Role: !GetAtt TransformationLambdaRole.Arn
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          s3 = boto3.client("s3")
+          CURATED_BUCKET = "aws-free-tier-etl-curated-446072489762"
+
+          def lambda_handler(event, context):
+              for record in event.get("Records", []):
+                  body = json.loads(record["body"])
+                  data = body.get("record", {})
+
+                  output = {
+                      "id": data.get("id"),
+                      "processed": True
+                  }
+
+                  s3.put_object(
+                      Bucket=CURATED_BUCKET,
+                      Key=f"{output['id']}.json",
+                      Body=json.dumps(output)
+                  )
+
+              return {"status": "done"}
