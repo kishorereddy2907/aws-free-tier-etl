@@ -21,9 +21,28 @@ jobs:
           role-to-assume: arn:aws:iam::446072489762:role/GitHubOIDCDeployRole
           aws-region: us-east-1
 
-      - name: Deploy CloudFormation stack
+      - name: Deploy IAM Stack
         run: |
+          aws cloudformation deploy \
+            --stack-name aws-free-tier-etl-iam \
+            --template-file cloudformation/iam-stack.yaml \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      - name: Deploy ETL Stack
+        run: |
+          # Retrieve outputs from IAM stack
+          VALIDATION_ROLE=$(aws cloudformation describe-stacks --stack-name aws-free-tier-etl-iam --query "Stacks[0].Outputs[?OutputKey=='ValidationLambdaRoleArn'].OutputValue" --output text)
+          TRANSFORM_ROLE=$(aws cloudformation describe-stacks --stack-name aws-free-tier-etl-iam --query "Stacks[0].Outputs[?OutputKey=='TransformationLambdaRoleArn'].OutputValue" --output text)
+          SFN_ROLE=$(aws cloudformation describe-stacks --stack-name aws-free-tier-etl-iam --query "Stacks[0].Outputs[?OutputKey=='StepFunctionsRoleArn'].OutputValue" --output text)
+          EVENT_ROLE=$(aws cloudformation describe-stacks --stack-name aws-free-tier-etl-iam --query "Stacks[0].Outputs[?OutputKey=='EventBridgeInvokeStepFunctionsRoleArn'].OutputValue" --output text)
+
+          # Deploy ETL stack
           aws cloudformation deploy \
             --stack-name aws-free-tier-etl \
             --template-file cloudformation/etl-stack.yaml \
-            --capabilities CAPABILITY_NAMED_IAM
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              ValidationLambdaRoleArn=$VALIDATION_ROLE \
+              TransformationLambdaRoleArn=$TRANSFORM_ROLE \
+              StepFunctionsRoleArn=$SFN_ROLE \
+              EventBridgeInvokeStepFunctionsRoleArn=$EVENT_ROLE
