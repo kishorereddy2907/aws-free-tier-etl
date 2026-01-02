@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Free Tier ETL - Base Infrastructure
+Description: Free Tier ETL - Base Infra + Messaging
 
 Resources:
 
@@ -12,3 +12,44 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: aws-free-tier-etl-curated-446072489762
+
+  ETLTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: aws-free-tier-etl-topic
+
+  ETLDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: aws-free-tier-etl-dlq
+
+  ETLQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: aws-free-tier-etl-queue
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ETLDLQ.Arn
+        maxReceiveCount: 3
+
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref ETLQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: sqs:SendMessage
+            Resource: !GetAtt ETLQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref ETLTopic
+
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ETLTopic
+      Protocol: sqs
+      Endpoint: !GetAtt ETLQueue.Arn
