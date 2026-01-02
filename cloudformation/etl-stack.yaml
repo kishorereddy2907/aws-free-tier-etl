@@ -27,7 +27,7 @@ Resources:
       TopicName: aws-free-tier-etl-topic
 
   # --------------------
-  # SQS Queues
+  # SQS Queues + DLQ
   # --------------------
 
   ETLDLQ:
@@ -123,24 +123,19 @@ Resources:
           TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
 
           def lambda_handler(event, context):
-              try:
-                  record = event.get("record")
-                  if not record or "id" not in record:
-                      raise ValueError("Invalid record")
-
+              record = event.get("record")
+              if not record or "id" not in record:
                   sns.publish(
                       TopicArn=TOPIC_ARN,
-                      Message=json.dumps({"status": "SUCCESS", "record": record})
+                      Message=json.dumps({"status": "FAILED", "error": "Invalid record"})
                   )
+                  raise ValueError("Invalid record")
 
-                  return {"status": "validated"}
-
-              except Exception as e:
-                  sns.publish(
-                      TopicArn=TOPIC_ARN,
-                      Message=json.dumps({"status": "FAILED", "error": str(e)})
-                  )
-                  raise
+              sns.publish(
+                  TopicArn=TOPIC_ARN,
+                  Message=json.dumps({"status": "SUCCESS", "record": record})
+              )
+              return {"status": "validated"}
 
   # --------------------
   # Transformation Lambda IAM Role
@@ -164,6 +159,12 @@ Resources:
               - Effect: Allow
                 Action: s3:PutObject
                 Resource: arn:aws:s3:::aws-free-tier-etl-curated-446072489762/*
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt ETLQueue.Arn
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
