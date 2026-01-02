@@ -254,3 +254,33 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "*"
+  ValidationStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: aws-free-tier-etl-validation-sm
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString:
+        Fn::Sub: |
+          {
+            "Comment": "ETL validation workflow",
+            "StartAt": "ValidateData",
+            "States": {
+              "ValidateData": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::lambda:invoke",
+                "Parameters": {
+                  "FunctionName": "${ValidationLambda.Arn}",
+                  "Payload.$": "$"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                  }
+                ],
+                "End": true
+              }
+            }
+          }
