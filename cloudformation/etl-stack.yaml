@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Free Tier ETL - S3 + SNS + SQS + Validation Lambda
+Description: Free Tier ETL - S3 + SNS + SQS + Lambdas
 
 Resources:
 
@@ -67,7 +67,7 @@ Resources:
       Endpoint: !GetAtt ETLQueue.Arn
 
   # --------------------
-  # IAM Role for Validation Lambda
+  # Validation Lambda IAM Role
   # --------------------
 
   ValidationLambdaRole:
@@ -87,12 +87,10 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action:
-                  - s3:GetObject
+                Action: s3:GetObject
                 Resource: arn:aws:s3:::aws-free-tier-etl-raw-446072489762/*
               - Effect: Allow
-                Action:
-                  - sns:Publish
+                Action: sns:Publish
                 Resource: !Ref ETLTopic
               - Effect: Allow
                 Action:
@@ -133,10 +131,7 @@ Resources:
 
                   sns.publish(
                       TopicArn=TOPIC_ARN,
-                      Message=json.dumps({
-                          "status": "SUCCESS",
-                          "record": record
-                      })
+                      Message=json.dumps({"status": "SUCCESS", "record": record})
                   )
 
                   return {"status": "validated"}
@@ -144,13 +139,15 @@ Resources:
               except Exception as e:
                   sns.publish(
                       TopicArn=TOPIC_ARN,
-                      Message=json.dumps({
-                          "status": "FAILED",
-                          "error": str(e)
-                      })
+                      Message=json.dumps({"status": "FAILED", "error": str(e)})
                   )
                   raise
-    TransformationLambdaRole:
+
+  # --------------------
+  # Transformation Lambda IAM Role
+  # --------------------
+
+  TransformationLambdaRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: aws-free-tier-etl-transform-role
@@ -167,8 +164,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action:
-                  - s3:PutObject
+                Action: s3:PutObject
                 Resource: arn:aws:s3:::aws-free-tier-etl-curated-446072489762/*
               - Effect: Allow
                 Action:
@@ -176,6 +172,10 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "*"
+
+  # --------------------
+  # Transformation Lambda
+  # --------------------
 
   TransformationLambda:
     Type: AWS::Lambda::Function
@@ -210,6 +210,10 @@ Resources:
                   )
 
               return {"status": "done"}
+
+  # --------------------
+  # SQS → Lambda Wiring
+  # --------------------
 
   TransformationLambdaInvokePermission:
     Type: AWS::Lambda::Permission
