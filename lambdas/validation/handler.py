@@ -6,18 +6,14 @@ import boto3
 s3 = boto3.client("s3")
 
 REQUIRED_COLUMNS = ["email", "country"]
-EXPECTED_MIN_COLUMNS = 2
-MAX_EMPTY_FILE_ROWS = 0
+MIN_DATA_ROWS = 1
 
 
 def lambda_handler(event, context):
     """
     Validation responsibilities:
-    - CSV format check
-    - Header check
-    - Column count validation
-    - Record count validation
-    - Email duplicate detection
+    - Header validation (required columns)
+    - Row count validation (non-empty file)
     """
 
     bucket = event["bucket"]
@@ -27,25 +23,17 @@ def lambda_handler(event, context):
     header, rows = parse_csv(csv_content)
 
     validate_header(header)
-    validate_column_count(header)
-    validate_record_count(rows)
+    validate_row_count(rows)
 
-    good_records, bad_records = split_duplicates(rows, header.index("email"))
-
-    result = {
+    return {
         "bucket": bucket,
         "key": key,
+        "valid": True,
         "metrics": {
-            "total_records": len(rows),
-            "valid_records": len(good_records),
-            "duplicate_records": len(bad_records),
+            "total_rows": len(rows),
             "column_count": len(header)
-        },
-        "good_data": good_records,
-        "bad_data": bad_records
+        }
     }
-
-    return result
 
 
 # -----------------------------
@@ -53,6 +41,7 @@ def lambda_handler(event, context):
 # -----------------------------
 
 def read_csv_from_s3(bucket, key):
+    """Read CSV file from S3 bucket."""
     try:
         obj = s3.get_object(Bucket=bucket, Key=key)
         return obj["Body"].read().decode("utf-8")
@@ -60,54 +49,29 @@ def read_csv_from_s3(bucket, key):
         raise ValueError(f"Failed to read CSV from S3: {str(e)}")
 
 
-def parse_csv(csv_text):
-    try:
-        reader = csv.reader(io.StringIO(csv_text))
-        rows = list(reader)
-    except Exception:
-        raise ValueError("File is not valid CSV format")
-
+def parse_csv(csv_content):
+    """Parse CSV content and return header and data rows."""
+    reader = csv.reader(io.StringIO(csv_content))
+    rows = list(reader)
+    
     if not rows:
         raise ValueError("CSV file is empty")
-
+    
     header = rows[0]
     data_rows = rows[1:]
-
+    
     return header, data_rows
 
 
 def validate_header(header):
-    missing = [col for col in REQUIRED_COLUMNS if col not in header]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+    """Validate that all required columns are present in the header."""
+    missing_columns = [col for col in REQUIRED_COLUMNS if col not in header]
+    
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
 
 
-def validate_column_count(header):
-    if len(header) < EXPECTED_MIN_COLUMNS:
-        raise ValueError("Invalid column count in CSV header")
-
-
-def validate_record_count(rows):
-    if len(rows) <= MAX_EMPTY_FILE_ROWS:
-        raise ValueError("CSV file contains no data rows")
-
-
-def split_duplicates(rows, email_index):
-    seen_emails = set()
-    good = []
-    bad = []
-
-    for row in rows:
-        email = row[email_index].strip().lower()
-
-        if not email:
-            bad.append(row)
-            continue
-
-        if email in seen_emails:
-            bad.append(row)
-        else:
-            seen_emails.add(email)
-            good.append(row)
-
-    return good, bad
+def validate_row_count(rows):
+    """Validate that the CSV has at least the minimum required data rows."""
+    if len(rows) < MIN_DATA_ROWS:
+        raise ValueError(f"CSV must have at least {MIN_DATA_ROWS} data row(s), found {len(rows)}")
