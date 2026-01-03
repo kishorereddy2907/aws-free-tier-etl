@@ -64,8 +64,9 @@ def parse_csv(csv_content):
 
 
 def validate_header(header):
-    """Validate that all required columns are present in the header."""
-    missing_columns = [col for col in REQUIRED_COLUMNS if col not in header]
+    """Validate that all required columns are present in the header (case-insensitive)."""
+    header_lower = [col.lower().strip() for col in header]
+    missing_columns = [col for col in REQUIRED_COLUMNS if col not in header_lower]
     
     if missing_columns:
         raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
