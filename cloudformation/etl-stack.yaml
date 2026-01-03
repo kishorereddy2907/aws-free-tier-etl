@@ -213,12 +213,20 @@ Resources:
                   # 1. Parse Input
                   all_records = []
                   
-                  for record in event.get("Records", []):
-                      body = json.loads(record["body"])
-                      if "record" in body:
-                          all_records.append(body["record"])
+                  # Check for SQS Records
+                  if "Records" in event:
+                      for record in event["Records"]:
+                          body = json.loads(record["body"])
+                          if "record" in body:
+                              all_records.append(body["record"])
+                          else:
+                              all_records.append(body)
+                  else:
+                      # Direct invocation (Step Functions or Test)
+                      if "record" in event:
+                          all_records.append(event["record"])
                       else:
-                          all_records.append(body)
+                          all_records.append(event)
                   
                   if not all_records:
                       print("No records to process.")
@@ -296,6 +304,37 @@ Resources:
                 "Resource": "arn:aws:states:::lambda:invoke",
                 "Parameters": {
                   "FunctionName": "${ValidationLambda.Arn}",
+                  "Payload.$": "$"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                  }
+                ],
+                "End": true
+              }
+            }
+          }
+
+  TransformationStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: aws-free-tier-etl-transformation-sm
+      RoleArn: !Ref StepFunctionsRoleArn
+      DefinitionString:
+        Fn::Sub: |
+          {
+            "Comment": "ETL transformation workflow",
+            "StartAt": "TransformData",
+            "States": {
+              "TransformData": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::lambda:invoke",
+                "Parameters": {
+                  "FunctionName": "${TransformationLambda.Arn}",
                   "Payload.$": "$"
                 },
                 "Retry": [

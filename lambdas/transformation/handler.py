@@ -17,20 +17,23 @@ def lambda_handler(event, context):
     """
     try:
         # 1. Parse Input
-        # Assuming event comes from SQS -> Lambda, records are in event["Records"]
-        # And the "body" of the SQS message contains the actual data payload
-        
         all_records = []
         
-        for record in event.get("Records", []):
-            body = json.loads(record["body"])
-            # Flatten or extract relevant data. 
-            # Assuming 'record' key in body holds the row data based on previous context.
-            if "record" in body:
-                all_records.append(body["record"])
+        # Check for SQS Records
+        if "Records" in event:
+            for record in event["Records"]:
+                body = json.loads(record["body"])
+                if "record" in body:
+                    all_records.append(body["record"])
+                else:
+                    all_records.append(body)
+        else:
+            # Direct invocation (Step Functions or Test)
+            # Assume event itself is the record or contains "record"
+            if "record" in event:
+                all_records.append(event["record"])
             else:
-                # Fallback if the whole body is the record
-                all_records.append(body)
+                all_records.append(event)
         
         if not all_records:
             print("No records to process.")
