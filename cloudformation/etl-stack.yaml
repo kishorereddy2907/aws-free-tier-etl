@@ -190,6 +190,9 @@ Resources:
       Timeout: 30
       Layers:
         - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python310:12
+      Environment:
+        Variables:
+          CURATED_BUCKET: !Ref CuratedBucket
       Code:
         ZipFile: |
           import json
@@ -197,9 +200,10 @@ Resources:
           import pandas as pd
           import io
           import datetime
+          import os
 
           s3 = boto3.client("s3")
-          CURATED_BUCKET = "aws-free-tier-etl-curated-446072489762"
+          CURATED_BUCKET = os.environ.get("CURATED_BUCKET")
 
           def lambda_handler(event, context):
               """
