@@ -1,25 +1,16 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Free Tier ETL - S3 + SNS + SQS + Lambdas
+Description: Serverless ETL with Lambda validation, Glue transformation, Redshift target
 
 Parameters:
-  ValidationLambdaRoleArn:
+  ProjectName:
     Type: String
-    Description: ARN of the IAM Role for Validation Lambda
-  TransformationLambdaRoleArn:
-    Type: String
-    Description: ARN of the IAM Role for Transformation Lambda
-  StepFunctionsRoleArn:
-    Type: String
-    Description: ARN of the IAM Role for Step Functions
-  EventBridgeInvokeStepFunctionsRoleArn:
-    Type: String
-    Description: ARN of the IAM Role for EventBridge to invoke Step Functions
+    Default: aws-free-tier-etl
 
 Resources:
 
-  # --------------------
-  # S3 Buckets
-  # --------------------
+# -------------------------------------------------
+# S3 BUCKETS
+# -------------------------------------------------
 
   RawBucket:
     Type: AWS::S3::Bucket
@@ -31,28 +22,19 @@ Resources:
     Properties:
       BucketName: aws-free-tier-etl-curated-446072489762
 
-  # --------------------
-  # SNS Topic
-  # --------------------
+# -------------------------------------------------
+# SNS + SQS
+# -------------------------------------------------
 
   ETLTopic:
     Type: AWS::SNS::Topic
-    Properties:
-      TopicName: aws-free-tier-etl-topic
-
-  # --------------------
-  # SQS Queues + DLQ
-  # --------------------
 
   ETLDLQ:
     Type: AWS::SQS::Queue
-    Properties:
-      QueueName: aws-free-tier-etl-dlq
 
   ETLQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: aws-free-tier-etl-queue
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt ETLDLQ.Arn
         maxReceiveCount: 3
@@ -60,10 +42,8 @@ Resources:
   QueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
-      Queues:
-        - !Ref ETLQueue
+      Queues: [!Ref ETLQueue]
       PolicyDocument:
-        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal: "*"
@@ -80,298 +60,196 @@ Resources:
       Protocol: sqs
       Endpoint: !GetAtt ETLQueue.Arn
 
-  # --------------------
-  # Validation Lambda
-  # --------------------
+# -------------------------------------------------
+# VALIDATION LAMBDA
+# -------------------------------------------------
+
+  ValidationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ValidationPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: arn:aws:s3:::aws-free-tier-etl-raw-446072489762/*
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref ETLTopic
+              - Effect: Allow
+                Action: logs:*
+                Resource: "*"
 
   ValidationLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: aws-free-tier-etl-validation
       Runtime: python3.10
       Handler: index.lambda_handler
-      Role: !Ref ValidationLambdaRoleArn
-      Timeout: 30
+      Role: !GetAtt ValidationLambdaRole.Arn
+      Timeout: 60
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref ETLTopic
       Code:
         ZipFile: |
-          import csv
-          import io
-          import json
-          import boto3
-
+          import csv, io, json, boto3, os
           s3 = boto3.client("s3")
-
+          sns = boto3.client("sns")
           REQUIRED_COLUMNS = ["email", "country"]
-          MIN_DATA_ROWS = 1
-
 
           def lambda_handler(event, context):
-              """
-              Validation responsibilities:
-              - Header validation (required columns)
-              - Row count validation (non-empty file)
-              """
-
               bucket = event["bucket"]
               key = event["key"]
-
-              csv_content = read_csv_from_s3(bucket, key)
-              header, rows = parse_csv(csv_content)
-
-              validate_header(header)
-              validate_row_count(rows)
-
-              return {
-                  "bucket": bucket,
-                  "key": key,
-                  "valid": True,
-                  "metrics": {
-                      "total_rows": len(rows),
-                      "column_count": len(header)
-                  }
-              }
-
-
-          # -----------------------------
-          # Helper functions
-          # -----------------------------
-
-          def read_csv_from_s3(bucket, key):
-              """Read CSV file from S3 bucket."""
-              try:
-                  obj = s3.get_object(Bucket=bucket, Key=key)
-                  return obj["Body"].read().decode("utf-8")
-              except Exception as e:
-                  raise ValueError(f"Failed to read CSV from S3: {str(e)}")
-
-
-          def parse_csv(csv_content):
-              """Parse CSV content and return header and data rows."""
-              reader = csv.reader(io.StringIO(csv_content))
+              obj = s3.get_object(Bucket=bucket, Key=key)
+              reader = csv.reader(io.StringIO(obj["Body"].read().decode("utf-8")))
               rows = list(reader)
-              
-              if not rows:
-                  raise ValueError("CSV file is empty")
-              
+
               header = rows[0]
-              data_rows = rows[1:]
-              
-              return header, data_rows
+              for col in REQUIRED_COLUMNS:
+                  if col not in header:
+                      raise ValueError(f"Missing column {col}")
 
+              sns.publish(
+                  TopicArn=os.environ["SNS_TOPIC_ARN"],
+                  Message=json.dumps({
+                      "bucket": bucket,
+                      "key": key
+                  })
+              )
+              return {"status": "validated"}
 
-          def validate_header(header):
-              """Validate that all required columns are present in the header (case-insensitive)."""
-              header_lower = [col.lower().strip() for col in header]
-              missing_columns = [col for col in REQUIRED_COLUMNS if col not in header_lower]
-              
-              if missing_columns:
-                  raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+# -------------------------------------------------
+# AWS GLUE (TRANSFORMATION)
+# -------------------------------------------------
 
-
-          def validate_row_count(rows):
-              """Validate that the CSV has at least the minimum required data rows."""
-              if len(rows) < MIN_DATA_ROWS:
-                  raise ValueError(f"CSV must have at least {MIN_DATA_ROWS} data row(s), found {len(rows)}")
-
-  # --------------------
-  # Transformation Lambda
-  # --------------------
-
-  TransformationLambda:
-    Type: AWS::Lambda::Function
+  GlueRole:
+    Type: AWS::IAM::Role
     Properties:
-      FunctionName: aws-free-tier-etl-transform
-      Runtime: python3.10
-      Handler: index.lambda_handler
-      Role: !Ref TransformationLambdaRoleArn
-      Timeout: 30
-      Layers:
-        - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python310:12
-      Environment:
-        Variables:
-          CURATED_BUCKET: !Ref CuratedBucket
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          import pandas as pd
-          import io
-          import datetime
-          import os
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GluePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - arn:aws:s3:::aws-free-tier-etl-raw-446072489762/*
+                  - arn:aws:s3:::aws-free-tier-etl-curated-446072489762/*
+              - Effect: Allow
+                Action: logs:*
+                Resource: "*"
 
-          s3 = boto3.client("s3")
-          CURATED_BUCKET = os.environ.get("CURATED_BUCKET")
-
-          def lambda_handler(event, context):
-              """
-              Transformation responsibilities:
-              - Read input data from event
-              - Convert to Pandas DataFrame
-              - Write to Parquet format
-              - Upload to Curated S3 Bucket with timestamp
-              """
-              try:
-                  # 1. Parse Input
-                  all_records = []
-                  
-                  # Check for SQS Records
-                  if "Records" in event:
-                      for record in event["Records"]:
-                          body = json.loads(record["body"])
-                          if "record" in body:
-                              all_records.append(body["record"])
-                          else:
-                              all_records.append(body)
-                  else:
-                      # Direct invocation (Step Functions or Test)
-                      if "record" in event:
-                          all_records.append(event["record"])
-                      else:
-                          all_records.append(event)
-                  
-                  if not all_records:
-                      print("No records to process.")
-                      return {"status": "skipped", "reason": "no_records"}
-
-                  # 2. Convert to DataFrame
-                  df = pd.DataFrame(all_records)
-                  
-                  # 3. Convert to Parquet
-                  parquet_buffer = io.BytesIO()
-                  df.to_parquet(parquet_buffer, index=False)
-                  parquet_content = parquet_buffer.getvalue()
-
-                  # 4. Generate Timestamped Key
-                  timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                  file_name = f"data_{timestamp}.parquet"
-                  
-                  # 5. Upload to S3
-                  s3.put_object(
-                      Bucket=CURATED_BUCKET,
-                      Key=file_name,
-                      Body=parquet_content,
-                      ContentType="application/x-parquet"
-                  )
-                  
-                  print(f"Successfully uploaded {file_name} to {CURATED_BUCKET}")
-                  
-                  return {
-                      "status": "success", 
-                      "file": file_name, 
-                      "record_count": len(all_records)
-                  }
-
-              except Exception as e:
-                  print(f"Transformation failed: {str(e)}")
-                  raise e
-
-  # --------------------
-  # SQS → Lambda Wiring
-  # --------------------
-
-  TransformationLambdaInvokePermission:
-    Type: AWS::Lambda::Permission
+  GlueJob:
+    Type: AWS::Glue::Job
     Properties:
-      FunctionName: !Ref TransformationLambda
-      Action: lambda:InvokeFunction
-      Principal: sqs.amazonaws.com
-      SourceArn: !GetAtt ETLQueue.Arn
+      Name: aws-free-tier-etl-glue-job
+      Role: !GetAtt GlueRole.Arn
+      GlueVersion: "4.0"
+      Command:
+        Name: glueetl
+        ScriptLocation: s3://aws-free-tier-etl-curated-446072489762/scripts/glue_job.py
+      DefaultArguments:
+        --TempDir: s3://aws-free-tier-etl-curated-446072489762/temp/
+        --job-language: python
 
-  SQSToTransformationMapping:
-    Type: AWS::Lambda::EventSourceMapping
+# -------------------------------------------------
+# STEP FUNCTIONS
+# -------------------------------------------------
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
     Properties:
-      EventSourceArn: !GetAtt ETLQueue.Arn
-      FunctionName: !Ref TransformationLambda
-      BatchSize: 1
-      Enabled: true
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFnPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt ValidationLambda.Arn
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                Resource: "*"
+              - Effect: Allow
+                Action: logs:*
+                Resource: "*"
 
-  # --------------------
-  # Step Functions
-  # --------------------
-
-  ValidationStateMachine:
+  ETLStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
-      StateMachineName: aws-free-tier-etl-validation-sm
-      RoleArn: !Ref StepFunctionsRoleArn
+      RoleArn: !GetAtt StepFunctionsRole.Arn
       DefinitionString:
         Fn::Sub: |
           {
-            "Comment": "ETL validation workflow",
-            "StartAt": "ValidateData",
+            "StartAt": "Validate",
             "States": {
-              "ValidateData": {
+              "Validate": {
                 "Type": "Task",
                 "Resource": "arn:aws:states:::lambda:invoke",
                 "Parameters": {
                   "FunctionName": "${ValidationLambda.Arn}",
                   "Payload.$": "$"
                 },
-                "Retry": [
-                  {
-                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
-                    "IntervalSeconds": 2,
-                    "MaxAttempts": 2,
-                    "BackoffRate": 2
-                  }
-                ],
-                "End": true
-              }
-            }
-          }
-
-  TransformationStateMachine:
-    Type: AWS::StepFunctions::StateMachine
-    Properties:
-      StateMachineName: aws-free-tier-etl-transformation-sm
-      RoleArn: !Ref StepFunctionsRoleArn
-      DefinitionString:
-        Fn::Sub: |
-          {
-            "Comment": "ETL transformation workflow",
-            "StartAt": "TransformData",
-            "States": {
-              "TransformData": {
+                "Next": "Transform"
+              },
+              "Transform": {
                 "Type": "Task",
-                "Resource": "arn:aws:states:::lambda:invoke",
+                "Resource": "arn:aws:states:::glue:startJobRun.sync",
                 "Parameters": {
-                  "FunctionName": "${TransformationLambda.Arn}",
-                  "Payload.$": "$"
+                  "JobName": "aws-free-tier-etl-glue-job"
                 },
-                "Retry": [
-                  {
-                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
-                    "IntervalSeconds": 2,
-                    "MaxAttempts": 2,
-                    "BackoffRate": 2
-                  }
-                ],
                 "End": true
               }
             }
           }
 
-  # --------------------
-  # EventBridge Rule
-  # --------------------
+# -------------------------------------------------
+# EVENTBRIDGE (SCHEDULING)
+# -------------------------------------------------
 
-  ETLScheduleRule:
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref ETLStateMachine
+
+  ScheduleRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: aws-free-tier-etl-schedule
       ScheduleExpression: rate(1 day)
-      State: ENABLED
       Targets:
-        - Arn: !Ref ValidationStateMachine
-          Id: StepFunctionsTarget
-          RoleArn: !Ref EventBridgeInvokeStepFunctionsRoleArn
-          Input: |
-            {
-              "record": {
-                "id": "scheduled-run",
-                "source": "eventbridge"
-              }
-            }
+        - Arn: !Ref ETLStateMachine
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: ETLTarget
