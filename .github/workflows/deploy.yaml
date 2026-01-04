@@ -24,6 +24,6 @@ jobs:
       - name: Deploy ETL Stack
         run: |
           aws cloudformation deploy \
-            --stack-name aws-free-tier-etl-stack \
+            --stack-name aws-free-tier-etl \
             --template-file cloudformation/etl-stack.yaml \
             --capabilities CAPABILITY_NAMED_IAM
