@@ -149,6 +149,7 @@ Resources:
                 Resource:
                   - arn:aws:s3:::aws-free-tier-etl-raw-446072489762/*
                   - arn:aws:s3:::aws-free-tier-etl-curated-446072489762/*
+                  - arn:aws:s3:::gluescipts446072489762/*
               - Effect: Allow
                 Action: logs:*
                 Resource: "*"
@@ -161,7 +162,7 @@ Resources:
       GlueVersion: "4.0"
       Command:
         Name: glueetl
-        ScriptLocation: s3://aws-free-tier-etl-curated-446072489762/scripts/glue_job.py
+        ScriptLocation: s3://gluescipts446072489762/glue_job.py
       DefaultArguments:
         --TempDir: s3://aws-free-tier-etl-curated-446072489762/temp/
         --job-language: python
